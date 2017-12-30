@@ -5,299 +5,179 @@
  */
 package com.kineticdata.bridgehub.adapter.nagios;
 
-import com.kineticdata.bridgehub.adapter.nagios.NagiosXiAdapter;
-import com.kineticdata.bridgehub.adapter.nagios.NagiosQualificationParser;
 import com.kineticdata.bridgehub.adapter.BridgeError;
 import com.kineticdata.bridgehub.adapter.BridgeRequest;
 import com.kineticdata.bridgehub.adapter.Count;
 import com.kineticdata.bridgehub.adapter.Record;
+import com.kineticdata.bridgehub.adapter.RecordList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import org.junit.Test;
 import static org.junit.Assert.*;
+import org.junit.Before;
 
-
-/**
- *
- * @author austin.peters
- */
 public class NagiosXiAdapterTest {
     
-    private final String elasticUrl = "http://localhost:9200";
+    private final String BRIDGE_ERROR_MSG_INVALID_KEY = "The Nagios XI server responding with the following API error message: Invalid API Key";
     
-    @Test
-    public void test_escapedSearchUrl() throws Exception {
+    private final String NAGIOS_URL = "http://127.0.0.1/nagiosxi/";
+    private final String API_KEY = "REPLACE_API_KEY";
+    private StringBuilder expectedUrl;
+    private NagiosQualificationParser parser;
+    private NagiosXiAdapter bridgeAdapter;
+    private BridgeRequest bridgeRequest;
+    private Map<String, String> bridgeConfig;
+    private Map<String, String> bridgeMetadata;
+    private Map<String, String> bridgeParameters;
+    private String bridgeStructure = "objects/service";
+    private String bridgeQuery = "";
+    
+    @Before
+    public void setVariables(){
+        expectedUrl = new StringBuilder();
+        expectedUrl
+            .append(NAGIOS_URL)
+            .append("api/v1/");
         
-        StringBuilder expectedUrl = new StringBuilder();
-        String actualUrl = null;
-        String logLevel = "This is an error.";
-        String date = "2021-01-01";
-        String pageSize = "1000";
-        String offset = "0";
-        String structure = "filebeat-*";
-        String queryMethod = "search";
-        String query = "message:\"<%= parameter[\"log level\"] %>\" AND _timestamp:><%= parameter[\"date\"] %>";
+        parser = new NagiosQualificationParser();
         
-        BridgeRequest request = new BridgeRequest();
-        NagiosQualificationParser parser = new NagiosQualificationParser();
+        bridgeAdapter = new NagiosXiAdapter();
+        bridgeConfig = new HashMap();
+        bridgeConfig.put("API Key", API_KEY);
+        bridgeConfig.put("Nagios XI URL", NAGIOS_URL);
+        bridgeMetadata = new HashMap();
+        bridgeParameters = new HashMap();
+        bridgeQuery = "";
+        bridgeRequest = new BridgeRequest();
         
-        
-        Map<String,String> configuration = new HashMap<String,String>();
-        configuration.put("Username",null);
-        configuration.put("Password",null);
-        configuration.put("Elastic URL",elasticUrl);
-        
-        request.setStructure(structure);
-        request.setQuery(query);
-        
-        Map<String, String> bridgeParameters = new HashMap<String, String>();
-        bridgeParameters.put("log level", logLevel);
-        bridgeParameters.put("date", date);
-        request.setParameters(bridgeParameters);
-        
-        NagiosXiAdapter adapter = new NagiosXiAdapter();
-        adapter.setProperties(configuration);
-        adapter.initialize();
-        
-        Map<String, String> bridgeMetadata = new HashMap<String, String>();
-        bridgeMetadata.put("pageSize", pageSize);
-        bridgeMetadata.put("offset", offset);
-        request.setMetadata(bridgeMetadata);
-        
-        expectedUrl.append(elasticUrl)
-            .append("/")
-            .append(structure)
-            .append("/")
-            .append("_")
-            .append(queryMethod)
-            .append("?q=message%3A%22This%5C+is%5C+an%5C+error.%22+AND+_timestamp%3A%3E2021%5C-01%5C-01")
-            .append("&size=")
-            .append(pageSize)
-            .append("&from=")
-            .append(offset);
-
-        try {
-            actualUrl = adapter.buildUrl("search", request, parser);
-        } catch (BridgeError e) {
-            System.out.println(e.getMessage());
-            throw new RuntimeException(e);
-        }
-        
-        assertEquals(expectedUrl.toString(), actualUrl);
-        
-        try {
-            bridgeMetadata.put("order", "<%=field[\"_timestamp\"]%>:DESC,<%=field[\"_source.message\"]%>:ASC");
-            request.setMetadata(bridgeMetadata);
-            actualUrl = adapter.buildUrl("search", request, parser);
-        } catch (BridgeError e) {
-            throw new RuntimeException(e);
-        }
-        
-        expectedUrl.append("&sort=_timestamp%3Adesc%2Cmessage%3Aasc");
-        assertEquals(expectedUrl.toString(), actualUrl);
+        bridgeAdapter.setProperties(bridgeConfig);
         
     }
     
     @Test
-    public void testCountResults_UriSearch() throws Exception {
-        Integer expectedCount = 1;
-        String expectedUrl = elasticUrl + "/examples/doc/_count?q=message%3Aerror";
-        Count actualCount;
-        
-        Map<String,String> configuration = new HashMap<String,String>();
-        configuration.put("Username",null);
-        configuration.put("Password",null);
-        configuration.put("Elastic URL",elasticUrl);
-        
-        NagiosXiAdapter adapter = new NagiosXiAdapter();
-        NagiosQualificationParser parser = new NagiosQualificationParser();
-        adapter.setProperties(configuration);
-        adapter.initialize();
-        
-        Map<String, String> bridgeParameters = new HashMap<String, String>();
-        bridgeParameters.put("log level", "error");
-        
-        Map<String, String> bridgeMetadata = new HashMap<String, String>();
-        bridgeMetadata.put("pageSize", "1000");
-        bridgeMetadata.put("offset", "0");        
-        
-        BridgeRequest request = new BridgeRequest();
-        request.setParameters(bridgeParameters);
-        request.setMetadata(bridgeMetadata);        
-        request.setStructure("examples/doc");
-        request.setQuery("message:<%= parameter[\"log level\"] %>");
-        
-        assertEquals(expectedUrl, adapter.buildUrl("count", request, parser));
-        
-        try {
-            actualCount = adapter.count(request);
-        } catch (BridgeError e) {
-            System.out.println(e.getMessage());
-            throw new RuntimeException(e);
-        }
-        
-        assertEquals(expectedCount, actualCount.getValue());
+    public void test_e2e_initializaAuthPass() throws Exception {
+        bridgeAdapter.initialize();
     }
     
     @Test
-    public void testCountResults_RequestBodySearch() throws Exception {
-        Integer expectedCount = 1;
-        String expectedUrl = elasticUrl + "/examples/doc/_count";
-        Count actualCount;
-        
-        Map<String,String> configuration = new HashMap<String,String>();
-        configuration.put("Username",null);
-        configuration.put("Password",null);
-        configuration.put("Elastic URL",elasticUrl);
-        
-        NagiosXiAdapter adapter = new NagiosXiAdapter();
-        NagiosQualificationParser parser = new NagiosQualificationParser();
-        adapter.setProperties(configuration);
-        adapter.initialize();
-        
-        Map<String, String> bridgeParameters = new HashMap<String, String>();
-        bridgeParameters.put("elastic json query", "{\"query\":{\"match\":{\"message\": \"error\"}}}");
-        
-        Map<String, String> bridgeMetadata = new HashMap<String, String>();
-        bridgeMetadata.put("pageSize", "1000");
-        bridgeMetadata.put("offset", "0");        
-        
-        BridgeRequest request = new BridgeRequest();
-        request.setParameters(bridgeParameters);
-        request.setMetadata(bridgeMetadata);        
-        request.setStructure("examples/doc");
-        request.setQuery("{\"type\": \"Elasticsearch DSL\", \"query\": \"<%= parameter[\"elastic json query\"] %>\"}");
-        
-        assertEquals(expectedUrl, adapter.buildUrl("count", request, parser));
+    public void test_e2e_initializaAuthFail() throws Exception {
+        bridgeConfig.put("API Key", "");
+        bridgeAdapter.setProperties(bridgeConfig);
+        String apiError = null;
         
         try {
-            actualCount = adapter.count(request);
-        } catch (BridgeError e) {
-            System.out.println(e.getMessage());
-            throw new RuntimeException(e);
+            bridgeAdapter.initialize();
+        } catch (BridgeError err) {
+            apiError = err.getMessage();
         }
         
-        assertEquals(expectedCount, actualCount.getValue());
+        assertEquals(BRIDGE_ERROR_MSG_INVALID_KEY, apiError);
     }
     
     @Test
-    public void testRetrieveResults() throws Exception {
-        String expectedUrl = elasticUrl + "/examples/doc/_search?q=message%3Aerror&size=1000&from=0&_source=app.username%2Capp.name";
+    public void test_e2e_verifyCountResult() throws Exception {
         
-        Map<String,String> configuration = new HashMap<String,String>();
-        configuration.put("Username",null);
-        configuration.put("Password",null);
-        configuration.put("Elastic URL", elasticUrl);
+        bridgeAdapter.initialize();
+        bridgeQuery = "address=127.0.0.1";
+        bridgeStructure = "objects/host";
+        setBridgeRequest();
         
-        NagiosXiAdapter adapter = new NagiosXiAdapter();
-        NagiosQualificationParser parser = new NagiosQualificationParser();
-        adapter.setProperties(configuration);
-        adapter.initialize();
+        Count bridgeCount = bridgeAdapter.count(bridgeRequest);
         
-        Map<String, String> bridgeParameters = new HashMap<String, String>();
-        bridgeParameters.put("log level", "error");
+        assertEquals(
+            Integer.valueOf(1),
+            bridgeCount.getValue()
+        );
         
-        Map<String, String> bridgeMetadata = new HashMap<String, String>();
-        bridgeMetadata.put("pageSize", "1000");
-        bridgeMetadata.put("offset", "0");        
+    }
+    
+    @Test
+    public void test_e2e_verifyRetrieveResult() throws Exception {
         
-        BridgeRequest request = new BridgeRequest();
-        request.setParameters(bridgeParameters);
-        request.setMetadata(bridgeMetadata);        
-        request.setStructure("examples/doc");
-        request.setQuery("message:<%= parameter[\"log level\"] %>");
-        request.setFields(
+        bridgeAdapter.initialize();
+        bridgeQuery = "address=127.0.0.1";
+        bridgeStructure = "objects/host";
+        setBridgeRequest();
+        bridgeRequest.setFields(
             Arrays.asList(
-                "_source.app.username",
-                "_source.app.name"
+                "address"
             )
         );
         
-        assertEquals(expectedUrl, adapter.buildUrl("search", request, parser));
+        Record bridgeRecord = bridgeAdapter.retrieve(bridgeRequest);
         
-        Record bridgeRecord = adapter.retrieve(request);
+        assertEquals(
+            "127.0.0.1",
+            bridgeRecord.getValue("address")
+        );
         
     }
-
+    
     @Test
-    public void testRetrieveResults_RequestBodySearch() throws Exception {
-        String expectedUrl = elasticUrl + "/examples/doc/_search?size=1000&from=0&_source=message";
+    public void test_e2e_verifySearchResult() throws Exception {
         
-        Map<String,String> configuration = new HashMap<String,String>();
-        configuration.put("Username",null);
-        configuration.put("Password",null);
-        configuration.put("Elastic URL", elasticUrl);
-        
-        NagiosXiAdapter adapter = new NagiosXiAdapter();
-        NagiosQualificationParser parser = new NagiosQualificationParser();
-        adapter.setProperties(configuration);
-        adapter.initialize();
-        
-        Map<String, String> bridgeParameters = new HashMap<String, String>();
-        bridgeParameters.put("log level", "error");
-        
-        Map<String, String> bridgeMetadata = new HashMap<String, String>();
-        bridgeMetadata.put("pageSize", "1000");
-        bridgeMetadata.put("offset", "0");        
-        
-        BridgeRequest request = new BridgeRequest();
-        request.setParameters(bridgeParameters);
-        request.setMetadata(bridgeMetadata);        
-        request.setStructure("examples/doc");
-        request.setQuery("{\"type\": \"Elasticsearch DSL\", \"query\": \"{\\\"query\\\":{\\\"term\\\":{\\\"message\\\":\\\"<%= parameter[\"log level\"] %>\\\"}}}\"}");
-        request.setFields(
+        bridgeAdapter.initialize();
+        bridgeStructure = "objects/service";
+        setBridgeRequest();
+        bridgeRequest.setFields(
             Arrays.asList(
-                "_source.message"
+                "host_name",
+                "service_description"
             )
         );
         
-        assertEquals(expectedUrl, adapter.buildUrl("search", request, parser));
-        Record bridgeRecord = adapter.retrieve(request);
+        RecordList bridgeRecords = bridgeAdapter.search(bridgeRequest);
         
-        Map<String, Object> expectedValues = new HashMap();
-        expectedValues.put("_source.message", "this is an error message.");
-        
-        assertEquals(expectedValues, bridgeRecord.getRecord());
-                
-        
-    }    
-        
-    @Test
-    public void testJsonQualificationParsing() throws Exception {
-        
-        NagiosQualificationParser parser = new NagiosQualificationParser();
-        String originalQuery = "{\"type\": \"Elasticsearch DSL\", \"query\": \"{\\\"size\\\":0,\\\"query\\\":{\\\"bool\\\":{\\\"must\\\":[{\\\"term\\\":{\\\"field 1\\\":\\\"<%= parameter[\"reserved lucene characters test\"] %>\\\"}},{\\\"term\\\":{\\\"field 2\\\":\\\"<%= parameter[\"json characters test\"] %>\\\"}},{\\\"term\\\":{\\\"field 3\\\":\\\"<%= parameter[\"space slug\"] %>\\\"}},{\\\"range\\\":{\\\"timestamp\\\":{\\\"gte\\\":\\\"now-<%= parameter[\"number of previous days\"] %>d\\\",\\\"lte\\\":\\\"now\\\"}}}],}}}\"}";
-        String expectedParsedQuery = "{\"size\":0,\"query\":{\"bool\":{\"must\":[{\"term\":{\"field 1\":\"AND - OR *+\"}},{\"term\":{\"field 2\":\"\\\" \\\\r\\\\n \\\\ \"}},{\"term\":{\"field 3\":\"kinetic-data-slug\"}},{\"range\":{\"timestamp\":{\"gte\":\"now-14d\",\"lte\":\"now\"}}}],}}}";
-        
-        Map<String, String> parameters = new HashMap();
-        parameters.put("space slug", "kinetic-data-slug");
-        parameters.put("reserved lucene characters test", "AND - OR *+");
-        parameters.put("json characters test", "\" \\r\\n \\ ");
-        parameters.put("number of previous days", "14");
-        
-        String actualParsedQuery = parser.parse(originalQuery, parameters);
-        
-        assertEquals(expectedParsedQuery, actualParsedQuery);
+        assertTrue(bridgeRecords.getRecords().size() > 1);
         
     }
     
     @Test
-    public void testUriQualificationParsing() throws Exception {
-        
-        NagiosQualificationParser parser = new NagiosQualificationParser();
-        String originalQuery = "message:<%= parameter[\"reserved lucene characters test\"] %> AND field1:<%= parameter[\"json characters test\"] %>";
-        String expectedParsedQuery = "message:\\\\AND\\ \\-\\ \\\\OR\\ \\*\\+ AND field1:\\\"\\ \\\\r\\\\n\\ \\\\";
-        
-        
-        Map<String, String> parameters = new HashMap();
-        parameters.put("reserved lucene characters test", "AND - OR *+");
-        parameters.put("json characters test", "\" \\r\\n \\");
-        
-        String actualParsedQuery = parser.parse(originalQuery, parameters);
-        
-        assertEquals(expectedParsedQuery, actualParsedQuery);
-        
+    public void test_parametersUrlEncoded() throws Exception {
+        String serviceName = "This & that. Right?";
+        assertEquals(
+            "This+%26+that.+Right%3F", 
+            parser.encodeParameter("service name", serviceName)
+        );
     }
     
+    @Test
+    public void test_urlPathVerifyCount() throws Exception {
+        
+        bridgeAdapter.initialize_noAuth();
+        bridgeQuery = "name=<%= parameter[\"Parameter 1\"] %>&name=<%= parameter[\"Parameter 2\"] %>&starttime=<%= parameter[\"Parameter 3\"] %>";
+        bridgeParameters.put("Parameter 1", "Parameter value 1");
+        bridgeParameters.put("Parameter 2", "Parameter value 2");
+        bridgeParameters.put("Parameter 3", "Parameter value 3");
+        
+        setBridgeRequest();
+        setExpectedUrl();
+        
+        expectedUrl.append(
+            "&name=Parameter+value+1&name=Parameter+value+2&starttime=Parameter+value+3"
+        );
+        
+        assertEquals(
+            expectedUrl.toString(),
+            bridgeAdapter.buildUrl("count", bridgeRequest, parser)
+        );
+    }
+    
+
+    /*
+    * PRIVATE HELPER METHODS
+    */
+    private void setExpectedUrl() {
+        expectedUrl
+            .append(bridgeStructure)
+            .append(String.format("?apikey=%s", API_KEY));
+    }
+    
+    private void setBridgeRequest() {
+        bridgeRequest.setQuery(bridgeQuery);
+        bridgeRequest.setStructure(bridgeStructure);
+        bridgeRequest.setParameters(bridgeParameters);
+        bridgeRequest.setMetadata(bridgeMetadata);
+    }
 }
