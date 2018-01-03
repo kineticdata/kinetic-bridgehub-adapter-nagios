@@ -13,7 +13,6 @@ import com.kineticdata.bridgehub.adapter.RecordList;
 import com.kineticdata.commons.v1.config.ConfigurableProperty;
 import com.kineticdata.commons.v1.config.ConfigurablePropertyMap;
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -29,10 +28,9 @@ import org.apache.http.util.EntityUtils;
 import org.apache.commons.lang.StringUtils;
 import org.slf4j.LoggerFactory;
 import com.jayway.jsonpath.JsonPath;
+import com.jayway.jsonpath.PathNotFoundException;
 import java.net.URLEncoder;
-import org.apache.http.NameValuePair;
-import org.apache.http.client.entity.UrlEncodedFormEntity;
-import org.apache.http.message.BasicNameValuePair;
+import net.minidev.json.JSONArray;
 
 public class NagiosXiAdapter implements BridgeAdapter {
     /*----------------------------------------------------------------------------------------------
@@ -41,7 +39,8 @@ public class NagiosXiAdapter implements BridgeAdapter {
 
     /** Defines the adapter display name */
     public static final String NAME = "Nagios XI Bridge";
-    public static final String JSON_ROOT_DEFAULT = "$.";
+    public static final String JSON_ROOT_DEFAULT = "$.*.*";
+    public static final String JSON_ROOT_COUNT_PATH = "$.*.recordcount";
 
     /** Defines the LOGGER */
     protected static final org.slf4j.Logger LOGGER = LoggerFactory.getLogger(NagiosXiAdapter.class);
@@ -77,7 +76,7 @@ public class NagiosXiAdapter implements BridgeAdapter {
 
     /*---------------------------------------------------------------------------------------------
      * SETUP METHODS
-     *-------------------------------------------------------------------------------------------*/
+     *-------------------------------------------------------------------------------------------*/    
 
     @Override
     public void initialize() throws BridgeError {
@@ -85,6 +84,12 @@ public class NagiosXiAdapter implements BridgeAdapter {
         // Remove any trailing forward slash.
         this.apiEndpoint = properties.getValue(Properties.API_URL).replaceFirst("(\\/)$", "");
         testAuthenticationValues(this.apiEndpoint, this.apiKey);
+    }
+    
+    public void initialize_noAuth() {
+        this.apiKey = properties.getValue(Properties.API_KEY);
+        // Remove any trailing forward slash.
+        this.apiEndpoint = properties.getValue(Properties.API_URL).replaceFirst("(\\/)$", "");
     }
 
     @Override
@@ -116,10 +121,11 @@ public class NagiosXiAdapter implements BridgeAdapter {
 
         NagiosQualificationParser nagiosParser = new NagiosQualificationParser();
         String jsonResponse = nagiosQuery("count", request, nagiosParser);
-        Long count = JsonPath.parse(jsonResponse).read("$[*].recordcount", Long.class);
+        JSONArray jsonCount = JsonPath.read(jsonResponse, JSON_ROOT_COUNT_PATH);
+        String count = (String)jsonCount.get(0);
 
         // Create and return a Count object.
-        return new Count(count);
+        return new Count(Long.valueOf(count));
     }
 
     @Override
@@ -127,6 +133,9 @@ public class NagiosXiAdapter implements BridgeAdapter {
 
         NagiosQualificationParser nagiosParser = new NagiosQualificationParser();
         String jsonRootPath = NagiosQualificationParser.jsonPathMapping.get(request.getStructure());
+        if (jsonRootPath == null) {
+            jsonRootPath = JSON_ROOT_DEFAULT;
+        }
        
         String jsonResponse = nagiosQuery("search", request, nagiosParser);
 
@@ -170,6 +179,9 @@ public class NagiosXiAdapter implements BridgeAdapter {
 
         NagiosQualificationParser nagiosParser = new NagiosQualificationParser();
         String jsonRootPath = NagiosQualificationParser.jsonPathMapping.get(request.getStructure());
+        if (jsonRootPath == null) {
+            jsonRootPath = JSON_ROOT_DEFAULT;
+        }
         
         String jsonResponse = nagiosQuery("search", request, nagiosParser);
 
@@ -177,7 +189,11 @@ public class NagiosXiAdapter implements BridgeAdapter {
         DocumentContext jsonDocument = JsonPath.parse(jsonResponse);
         Object objectRoot = jsonDocument.read(jsonRootPath);
         Map<String,String> metadata = new LinkedHashMap<>();
-        metadata.put("count",JsonPath.parse(jsonResponse).read("$.hits.total", String.class));
+        
+        JSONArray jsonCount = JsonPath.read(jsonResponse, JSON_ROOT_COUNT_PATH);
+        String count = (String)jsonCount.get(0);
+        
+        metadata.put("count",count);
 
         if (objectRoot instanceof List) {
             List<Object> listRoot = (List)objectRoot;
@@ -227,17 +243,20 @@ public class NagiosXiAdapter implements BridgeAdapter {
             offset = metadata.get("offset");
         }
 
-        String query = null;
-        query = nagiosParser.parse(request.getQuery(),request.getParameters());
+        String query = nagiosParser.parse(request.getQuery(), request.getParameters());
 
         // Build up the url that you will use to retrieve the source data. Use the query variable
         // instead of request.getQuery() to get a query without parameter placeholders.
         StringBuilder url = new StringBuilder();
         url.append(this.apiEndpoint)
-            .append("/")
-            .append(request.getStructure());
+            .append("/api/v1/")
+            .append(StringUtils.chomp(request.getStructure(), "/"))
+            .append(String.format("?apikey=%s", apiKey));
         
-        addParameter(url, "apikey", request.getApplicationParameter(apiKey));
+        if (StringUtils.isNotBlank(query)) {
+            url.append("&")
+                .append(query);
+        }
 
         //only set pagination if we're not counting.
         if (queryMethod.equals("count") == false) {
@@ -261,82 +280,10 @@ public class NagiosXiAdapter implements BridgeAdapter {
 
         }
 
-        LOGGER.trace("Nagios URL: {}", url.toString());
+        LOGGER.debug("Nagios URL: {}", url.toString());
         return url.toString();
 
     }
-
-    public HttpEntity buildRequestBody(String queryMethod, BridgeRequest request, NagiosQualificationParser nagiosParser) throws BridgeError {
-        List<NameValuePair> params = new ArrayList<>();
-        HttpEntity result = null;
-
-        String query = nagiosParser.parse(request.getQuery(),request.getParameters());
-        //Set query to return everything if no qualification defined.
-        if (StringUtils.isBlank(query)) {
-            query = "*:*";
-        }
-
-        // If the query is a JSON object...
-        if (query.matches("^\\s*\\{.*?\\}\\s*$")) {
-            params.add(new BasicNameValuePair("json", query));
-            LOGGER.trace(String.format("JSON Query being sent to solr: %s", query));
-        } else {
-            params.add(new BasicNameValuePair("q", query));
-            LOGGER.trace(String.format("Lucene Query being sent to solr: %s", query));
-        }
-
-        //only set sorting and field return limitation if we're not counting.
-        if (queryMethod.equals("count") == false) {
-
-            //only set field limitation if we're not counting *and* the request specified fields to be returned.
-            if (request.getFields() != null && request.getFields().isEmpty() == false) {
-                StringBuilder includedFields = new StringBuilder();
-                String[] bridgeFields = request.getFieldArray();
-                for (int i = 0; i < request.getFieldArray().length; i++) {
-                    //strip _source from the beginning of the specified field name as this is redundent to Solr.
-                    includedFields.append(bridgeFields[i]);
-                    //only append a comma if this is not the last field
-                    if (i != (request.getFieldArray().length -1)) {
-                        includedFields.append(",");
-                    }
-                }
-                params.add(new BasicNameValuePair("fl", includedFields.toString()));
-            }
-            //only set sorting if we're not counting *and* the request specified a sort order.
-            if (request.getMetadata("order") != null) {
-                List<String> orderList = new ArrayList<>();
-                //loop over every defined sort order and add them to the Nagios URL
-                for (Map.Entry<String,String> entry : BridgeUtils.parseOrder(request.getMetadata("order")).entrySet()) {
-                    String key = entry.getKey();
-                    if (entry.getValue().equals("DESC")) {
-                        orderList.add(String.format("%s desc", key));
-                    }
-                    else {
-                        orderList.add(String.format("%s asc", key));
-                    }
-                }
-                params.add(
-                    new BasicNameValuePair(
-                        "sort",
-                        StringUtils.join(orderList,",")
-                    )
-                );
-            }
-
-        }
-
-        try {
-            result = new UrlEncodedFormEntity(params);
-        } catch (UnsupportedEncodingException exceptionDetails) {
-            throw new BridgeError (
-                "Unable to generate the URL encoded HTTP Request body for the Solr API request.",
-                exceptionDetails
-            );
-        }
-
-        return result;
-    }
-    
     
     /*----------------------------------------------------------------------------------------------
      * PRIVATE HELPER METHODS
@@ -380,7 +327,7 @@ public class NagiosXiAdapter implements BridgeAdapter {
                 String errorMessage = EntityUtils.toString(entity);
                 throw new BridgeError(
                     String.format(
-                        "The Nagios server returned a HTTP status code of %d, 200 was expected. Response body: %s",
+                        "The Nagios server returned a HTTP status code of %d, but 200 was expected. Response body: %s",
                         responseStatus,
                         errorMessage
                     )
@@ -388,22 +335,27 @@ public class NagiosXiAdapter implements BridgeAdapter {
             }
 
             result = EntityUtils.toString(entity);
-            LOGGER.trace(String.format("Request response code: %s", response.getStatusLine().getStatusCode()));
+            LOGGER.debug(String.format("Request response code: %s", response.getStatusLine().getStatusCode()));
         } catch (IOException e) {
             throw new BridgeError("Unable to make a connection to the Nagios server", e);
         }
-        LOGGER.trace(String.format("Nagios response - Raw Output: %s", result));
+        LOGGER.debug(String.format("Nagios response - Raw Output: %s", result));
 
         return result;
     }
 
-    //TODO: REWRITE THIS FOR NAGIOS INSTEAD OF ELASTICSEARCH.
     private void testAuthenticationValues(String restEndpoint, String apiKey) throws BridgeError {
-        LOGGER.debug("Testing the authentication credentials");
+        LOGGER.debug("Testing the Nagios XI authentication credentials");
         HttpGetWithEntity get = new HttpGetWithEntity();
         URI uri;
         try {
-            uri = new URI(String.format("%s/_cat/health",restEndpoint));
+            uri = new URI(
+                String.format(
+                    "%s/api/v1/system/status?apikey=%s",
+                    StringUtils.chomp(restEndpoint, "/"), 
+                    apiKey
+                )
+            );
         } catch (URISyntaxException e) {
             throw new BridgeError(e);
         }
@@ -411,13 +363,13 @@ public class NagiosXiAdapter implements BridgeAdapter {
 
         HttpClient client = HttpClients.createDefault();
         HttpResponse response;
+        String apiErrorMessage = null;
         try {
             response = client.execute(get);
             HttpEntity entity = response.getEntity();
-            EntityUtils.consume(entity);
             Integer responseCode = response.getStatusLine().getStatusCode();
             if (responseCode == 401) {
-                throw new BridgeError("Unauthorized: The inputted Username/Password combination is not valid.");
+                throw new BridgeError("Unauthorized: The supplied API key is not valid.");
             }
             if (responseCode < 200 || responseCode >= 300) {
                 throw new BridgeError(
@@ -426,11 +378,25 @@ public class NagiosXiAdapter implements BridgeAdapter {
                         responseCode
                     )
                 );
+            } else {
+                String apiResponse = EntityUtils.toString(entity);
+                try {
+                    apiErrorMessage = JsonPath
+                        .parse(apiResponse)
+                        .read("$.error", String.class);
+                } catch (PathNotFoundException err) {}
+                if (apiErrorMessage != null) {
+                    throw new BridgeError(
+                        String.format(
+                            "The Nagios XI server responding with the following API error message: %s", 
+                            apiErrorMessage
+                        )
+                    );
+                }
             }
         }
         catch (IOException e) {
-            LOGGER.error(e.getMessage());
-            throw new BridgeError("Unable to make a connection to the Nagios health check API.");
+            throw new BridgeError("Unable to make a connection to the Nagios system status API.", e);
         }
     }
 
