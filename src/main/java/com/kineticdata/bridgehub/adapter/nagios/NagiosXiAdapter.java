@@ -2,7 +2,6 @@ package com.kineticdata.bridgehub.adapter.nagios;
 
 import com.jayway.jsonpath.InvalidPathException;
 import com.jayway.jsonpath.DocumentContext;
-import com.kineticdata.bridgehub.helpers.http.HttpGetWithEntity;
 import com.kineticdata.bridgehub.adapter.BridgeAdapter;
 import com.kineticdata.bridgehub.adapter.BridgeError;
 import com.kineticdata.bridgehub.adapter.BridgeRequest;
@@ -23,6 +22,7 @@ import java.util.Map;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
 import org.apache.commons.lang.StringUtils;
@@ -121,8 +121,9 @@ public class NagiosXiAdapter implements BridgeAdapter {
 
         NagiosQualificationParser nagiosParser = new NagiosQualificationParser();
         String jsonResponse = nagiosQuery("count", request, nagiosParser);
+        String count = "0";
         JSONArray jsonCount = JsonPath.read(jsonResponse, JSON_ROOT_COUNT_PATH);
-        String count = (String)jsonCount.get(0);
+        count = (String)jsonCount.get(0);
 
         // Create and return a Count object.
         return new Count(Long.valueOf(count));
@@ -138,36 +139,42 @@ public class NagiosXiAdapter implements BridgeAdapter {
         }
        
         String jsonResponse = nagiosQuery("search", request, nagiosParser);
-
-        DocumentContext jsonDocument = JsonPath.parse(jsonResponse);
-        Object objectRoot = jsonDocument.read(jsonRootPath);
         Record recordResult = new Record(null);
-
-        if (objectRoot instanceof List) {
-            List<Object> listRoot = (List)objectRoot;
-            if (listRoot.size() == 1) {
+        
+        try {
+            
+            DocumentContext jsonDocument = JsonPath.parse(jsonResponse);
+            Object objectRoot = jsonDocument.read(jsonRootPath);
+            
+            if (objectRoot instanceof List) {
+                List<Object> listRoot = (List)objectRoot;
+                if (listRoot.size() == 1) {
+                    Map<String, Object> recordValues = new HashMap();
+                    request.getFields().forEach((field) -> {
+                        try {
+                            recordValues.put(field, JsonPath.parse(listRoot.get(0)).read(field));
+                        } catch (InvalidPathException e) {
+                            recordValues.put(field, null);
+                        }
+                    });
+                    recordResult = new Record(recordValues);
+                } else {
+                    throw new BridgeError("Multiple results matched an expected single match query");
+                }
+            } else if (objectRoot instanceof Map) {
                 Map<String, Object> recordValues = new HashMap();
                 request.getFields().forEach((field) -> {
                     try {
-                        recordValues.put(field, JsonPath.parse(listRoot.get(0)).read(field));
+                        recordValues.put(field, JsonPath.parse(objectRoot).read(field));
                     } catch (InvalidPathException e) {
                         recordValues.put(field, null);
                     }
                 });
                 recordResult = new Record(recordValues);
-            } else {
-                throw new BridgeError("Multiple results matched an expected single match query");
             }
-        } else if (objectRoot instanceof Map) {
-            Map<String, Object> recordValues = new HashMap();
-            request.getFields().forEach((field) -> {
-                try {
-                    recordValues.put(field, JsonPath.parse(objectRoot).read(field));
-                } catch (InvalidPathException e) {
-                    recordValues.put(field, null);
-                }
-            });
-            recordResult = new Record(recordValues);
+            
+        } catch (PathNotFoundException e) {
+            LOGGER.trace("The Nagios XI API query ({}) on the structure () matched zero results.", request.getQuery(), request.getStructure());
         }
 
         return recordResult;
@@ -186,40 +193,47 @@ public class NagiosXiAdapter implements BridgeAdapter {
         String jsonResponse = nagiosQuery("search", request, nagiosParser);
 
         List<Record> recordList = new ArrayList<>();
-        DocumentContext jsonDocument = JsonPath.parse(jsonResponse);
-        Object objectRoot = jsonDocument.read(jsonRootPath);
         Map<String,String> metadata = new LinkedHashMap<>();
         
-        JSONArray jsonCount = JsonPath.read(jsonResponse, JSON_ROOT_COUNT_PATH);
-        String count = (String)jsonCount.get(0);
-        
-        metadata.put("count",count);
+        try {
+            DocumentContext jsonDocument = JsonPath.parse(jsonResponse);
+            Object objectRoot = jsonDocument.read(jsonRootPath);
 
-        if (objectRoot instanceof List) {
-            List<Object> listRoot = (List)objectRoot;
-            metadata.put("size", String.valueOf(listRoot.size()));
-            listRoot.stream().map((arrayElement) -> {
-                Map<String, Object> recordValues = new HashMap();
-                DocumentContext jsonObject = JsonPath.parse(arrayElement);
-                request.getFields().forEach((field) -> {
-                    try {
-                        recordValues.put(field, jsonObject.read(field));
-                    } catch (InvalidPathException e) {
-                        recordValues.put(field, null);
-                    }
+            JSONArray jsonCount = JsonPath.read(jsonResponse, JSON_ROOT_COUNT_PATH);
+            String count = (String)jsonCount.get(0);
+
+            metadata.put("count",count);
+
+            if (objectRoot instanceof List) {
+                List<Object> listRoot = (List)objectRoot;
+                metadata.put("size", String.valueOf(listRoot.size()));
+                listRoot.stream().map((arrayElement) -> {
+                    Map<String, Object> recordValues = new HashMap();
+                    DocumentContext jsonObject = JsonPath.parse(arrayElement);
+                    request.getFields().forEach((field) -> {
+                        try {
+                            recordValues.put(field, jsonObject.read(field));
+                        } catch (InvalidPathException e) {
+                            recordValues.put(field, null);
+                        }
+                    });
+                    return recordValues;
+                }).forEachOrdered((recordValues) -> {
+                    recordList.add(new Record(recordValues));
                 });
-                return recordValues;
-            }).forEachOrdered((recordValues) -> {
+            } else if (objectRoot instanceof Map) {
+                metadata.put("size", "1");
+                Map<String, Object> recordValues = new HashMap();
+                DocumentContext jsonObject = JsonPath.parse(objectRoot);
+                request.getFields().forEach((field) -> {
+                    recordValues.put(field, jsonObject.read(field));
+                });
                 recordList.add(new Record(recordValues));
-            });
-        } else if (objectRoot instanceof Map) {
-            metadata.put("size", "1");
-            Map<String, Object> recordValues = new HashMap();
-            DocumentContext jsonObject = JsonPath.parse(objectRoot);
-            request.getFields().forEach((field) -> {
-                recordValues.put(field, jsonObject.read(field));
-            });
-            recordList.add(new Record(recordValues));
+            }
+        } catch (PathNotFoundException e) {
+            metadata.put("size", "0");
+            metadata.put("count", "0");
+            LOGGER.trace("The Nagios XI API query ({}) on the structure () matched zero results.", request.getQuery(), request.getStructure());
         }
 
         return new RecordList(request.getFields(), recordList, metadata);
@@ -307,7 +321,7 @@ public class NagiosXiAdapter implements BridgeAdapter {
         // Initialize the HTTP Client, Response, and Get objects.
         HttpClient client = HttpClients.createDefault();
         HttpResponse response;
-        HttpGetWithEntity get = new HttpGetWithEntity();
+        HttpGet get = new HttpGet();
         URI uri;
         try {
             uri = new URI(url);
@@ -346,7 +360,7 @@ public class NagiosXiAdapter implements BridgeAdapter {
 
     private void testAuthenticationValues(String restEndpoint, String apiKey) throws BridgeError {
         LOGGER.debug("Testing the Nagios XI authentication credentials");
-        HttpGetWithEntity get = new HttpGetWithEntity();
+        HttpGet get = new HttpGet();
         URI uri;
         try {
             uri = new URI(
