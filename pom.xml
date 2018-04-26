@@ -8,8 +8,8 @@
 
     <name>kinetic-bridgehub-adapter-nagios</name>
     <scm>
-        <connection>scm:git:https://github.com/kineticcommunity/kinetic-bridgehub-adapter-nagios.git</connection>
-        <developerConnection>scm:git:https://github.com/kineticcommunity/kinetic-bridgehub-adapter-nagios.git</developerConnection>
+        <connection>scm:git:https://github.com/kineticdata/kinetic-bridgehub-adapter-nagios.git</connection>
+        <developerConnection>scm:git:https://github.com/kineticdata/kinetic-bridgehub-adapter-nagios.git</developerConnection>
     </scm>
 
     <distributionManagement>
